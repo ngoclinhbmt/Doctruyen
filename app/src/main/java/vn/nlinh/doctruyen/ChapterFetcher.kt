@@ -91,13 +91,18 @@ object ChapterFetcher {
 
     fun parse(doc: Document, url: String): Chapter {
         val title = findTitle(doc)
-        val next = findLink(doc, url, NEXT_WORDS, "next") ?: guessByNumber(url, +1)
-        val prev = findLink(doc, url, PREV_WORDS, "prev") ?: guessByNumber(url, -1)
+        val next = findLink(doc, url, NEXT_WORDS, "next", +1) ?: guessByNumber(url, +1)
+        val prev = findLink(doc, url, PREV_WORDS, "prev", -1) ?: guessByNumber(url, -1)
 
-        doc.select("script, style, noscript, iframe, ins, svg, form, button, nav, header, footer, select")
-            .remove()
+        doc.select("script, style, noscript, iframe, ins, svg, select, nav, header, footer").remove()
+        // Chỉ bỏ nút/form nhỏ (có web bọc cả trang trong <form>, hoặc mỗi câu là một nút "nghe")
+        doc.select("button, form").filter { it.text().length < 40 }.forEach { it.remove() }
+
         val content = findContent(doc)
-        val paragraphs = content?.let { extractParagraphs(it) } ?: emptyList()
+        val primary = content?.let { extractParagraphs(it) } ?: emptyList()
+        val fallback = clusterFallback(doc.body())
+        val paragraphs =
+            if (primary.sumOf { it.length } < fallback.sumOf { it.length } * 0.6) fallback else primary
         return Chapter(url, title, paragraphs, next?.takeIf { it != url }, prev?.takeIf { it != url })
     }
 
@@ -139,7 +144,7 @@ object ChapterFetcher {
         val el = content.clone()
         el.select("a, ul, ol, h1, h2, h3, .ads, .ad, [class*=banner], [id*=ads]").remove()
         el.select("br").forEach { it.after(TextNode("\n")) }
-        el.select("p, div, li").forEach {
+        el.select("p, div, li, section, article, main, td, tr, blockquote, h4, h5, h6").forEach {
             it.prependText("\n")
             it.appendText("\n")
         }
@@ -147,6 +152,45 @@ object ChapterFetcher {
             .split('\n')
             .map { cleanText(it) }
             .filter { it.isNotBlank() && !isJunk(it) }
+    }
+
+    /**
+     * Dự phòng chung cho mọi web: lấy toàn bộ chữ trên trang theo dòng, tìm cụm dài nhất
+     * gồm nhiều câu văn dài liền nhau (xen kẽ vài dòng ngắn như lời thoại).
+     */
+    private fun clusterFallback(body: Element?): List<String> {
+        if (body == null) return emptyList()
+        val lines = extractParagraphs(body)
+        val longLen = 30
+        var bestStart = -1
+        var bestEnd = -1
+        var bestScore = 0
+        var i = 0
+        while (i < lines.size) {
+            if (lines[i].length < longLen) { i++; continue }
+            var j = i
+            var gap = 0
+            var score = 0
+            var last = i
+            while (j < lines.size) {
+                if (lines[j].length >= longLen) {
+                    score += lines[j].length
+                    last = j
+                    gap = 0
+                } else {
+                    gap++
+                    if (gap > 8) break
+                }
+                j++
+            }
+            if (score > bestScore) {
+                bestScore = score
+                bestStart = i
+                bestEnd = last
+            }
+            i = last + 1
+        }
+        return if (bestStart >= 0) lines.subList(bestStart, bestEnd + 1) else emptyList()
     }
 
     private fun isJunk(line: String): Boolean {
@@ -183,34 +227,46 @@ object ChapterFetcher {
 
     // ---------------- Link chương sau / trước ----------------
 
-    private fun findLink(doc: Document, current: String, words: Set<String>, key: String): String? {
+    private fun findLink(
+        doc: Document, current: String, words: Set<String>, key: String, delta: Int,
+    ): String? {
         val links = doc.select("a[href]").filter { a ->
             val href = a.attr("href").trim()
             href.isNotEmpty() && !href.startsWith("#") && !href.startsWith("javascript", true)
         }
+        fun norm(t: String) = cleanText(t).lowercase()
+            .replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+            .replace(Regex("\\s+"), " ").trim()
+        fun ok(a: Element): String? = a.absUrl("href").takeIf { it.isNotEmpty() && it != current }
+
         // 1) Theo chữ trên nút: "Tiếp", "Chương sau"...
         for (a in links) {
-            val text = cleanText(a.text()).lowercase()
-                .replace(Regex("[^\\p{L}\\p{N} ]"), " ")
-                .replace(Regex("\\s+"), " ").trim()
-            if (text in words) {
-                val abs = a.absUrl("href")
-                if (abs.isNotEmpty() && abs != current) return abs
+            if (norm(a.text()) in words) ok(a)?.let { return it }
+        }
+        // 2) Nút ghi số chương: đang ở chương 1 → tìm link "Chương 2"
+        val curNum = chapterNumber(current)
+        if (curNum != null) {
+            val target = curNum + delta
+            val numRe = Regex("^(chương|chuong|chapter|chap|ch)\\s*(\\d+)")
+            for (a in links) {
+                val m = numRe.find(norm(a.text())) ?: continue
+                if (m.groupValues[2].toIntOrNull() == target) ok(a)?.let { return it }
             }
         }
-        // 2) Theo rel="next"/"prev"
+        // 3) Theo rel="next"/"prev"
         doc.selectFirst("link[rel=$key], a[rel=$key]")?.absUrl("href")
             ?.takeIf { it.isNotEmpty() && it != current }?.let { return it }
-        // 3) Theo id/class có chữ next/prev
+        // 4) Theo id/class có chữ next/prev
         for (a in links) {
             val idc = (a.id() + " " + a.className()).lowercase()
-            if (idc.contains(key)) {
-                val abs = a.absUrl("href")
-                if (abs.isNotEmpty() && abs != current) return abs
-            }
+            if (idc.contains(key)) ok(a)?.let { return it }
         }
         return null
     }
+
+    private fun chapterNumber(url: String): Int? =
+        Regex("(chuong|chapter|chap|c)-(\\d+)", RegexOption.IGNORE_CASE)
+            .findAll(url).lastOrNull()?.groupValues?.get(2)?.toIntOrNull()
 
     /** Dự phòng: .../chuong-5/ → .../chuong-6/ */
     fun guessByNumber(url: String, delta: Int): String? {
