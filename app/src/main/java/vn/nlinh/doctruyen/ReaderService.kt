@@ -29,6 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
@@ -68,6 +69,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
     }
 
     private lateinit var prefs: Prefs
+    private lateinit var webLoader: WebPageLoader
     private lateinit var tts: TextToSpeech
     private var ttsReady = false
     private var pendingAction: (() -> Unit)? = null
@@ -104,6 +106,8 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
+        webLoader = WebPageLoader(this)
+        ChapterFetcher.debugDir = cacheDir
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         createChannel()
         tts = TextToSpeech(this, this)
@@ -222,6 +226,19 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
                 throw e
             } catch (e: ChapterFetcher.EndOfStoryException) {
                 finishStory(e.message ?: "Hết truyện")
+            } catch (e: ChapterFetcher.NoContentException) {
+                if (startIndex == 0 && autoplay && chapter != null && chapter?.nextUrl == url) {
+                    finishStory("Không tìm thấy chương tiếp theo – có thể đã hết truyện.")
+                } else {
+                    playing = false
+                    releaseWakeLock()
+                    setState {
+                        copy(loading = false, playing = false,
+                            status = "Không đọc được nội dung trang này (${e.message}). " +
+                                "Bấm \"Gửi trang lỗi\" để gửi cho người hỗ trợ.")
+                    }
+                    updateNotification()
+                }
             } catch (e: Exception) {
                 playing = false
                 releaseWakeLock()
@@ -234,27 +251,42 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
-    private suspend fun fetchWithRetry(url: String): Chapter {
-        var last: Exception? = null
-        for (attempt in 0 until 3) {
+    /**
+     * Cách 1: tải trực tiếp (nhanh). Nếu web chặn / không thấy nội dung →
+     * Cách 2: mở bằng trình duyệt ẩn, chờ JavaScript chạy xong rồi đọc.
+     */
+    private suspend fun fetchWithRetry(url: String, showStatus: Boolean = true): Chapter {
+        var directError: Exception? = null
+        for (attempt in 0 until 2) {
             try {
                 return withContext(Dispatchers.IO) { ChapterFetcher.fetch(url) }
             } catch (e: ChapterFetcher.EndOfStoryException) {
                 throw e
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: ChapterFetcher.NoContentException) {
+                directError = e
+                break
             } catch (e: Exception) {
-                last = e
-                delay(2000L * (attempt + 1))
+                directError = e
+                delay(1500L * (attempt + 1))
             }
         }
-        throw last ?: java.io.IOException("Không tải được")
+        if (showStatus) setState { copy(status = "Đang mở trang bằng trình duyệt ẩn…") }
+        val page = try {
+            webLoader.load(url)
+        } catch (e: TimeoutCancellationException) {
+            throw directError ?: ChapterFetcher.NoContentException("Trang tải quá lâu")
+        }
+        return withContext(Dispatchers.Default) {
+            ChapterFetcher.fromHtml(page.html, page.finalUrl, "trình duyệt ẩn")
+        }
     }
 
     private fun prefetch(url: String?) {
         if (url == null || cache.containsKey(url)) return
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { ChapterFetcher.fetch(url) } }
+            runCatching { fetchWithRetry(url, showStatus = false) }
                 .onSuccess { cache.clear(); cache[url] = it }
         }
     }

@@ -44,8 +44,16 @@ object ChapterFetcher {
         ' ' to ' ',
     )
 
+    /** Trang báo 404: thật sự hết truyện. */
     class EndOfStoryException(msg: String) : Exception(msg)
 
+    /** Tải được trang nhưng không thấy nội dung (web chặn / cần JavaScript / cấu trúc lạ). */
+    class NoContentException(msg: String) : Exception(msg)
+
+    /** Thư mục lưu trang vừa tải để gửi báo lỗi. */
+    @Volatile var debugDir: java.io.File? = null
+
+    /** Cách 1: tải trực tiếp (nhanh). */
     fun fetch(url: String): Chapter {
         val response = Jsoup.connect(url)
             .userAgent(USER_AGENT)
@@ -57,14 +65,28 @@ object ChapterFetcher {
             throw EndOfStoryException("Không còn chương tiếp theo (lỗi ${response.statusCode()}).")
         }
         if (response.statusCode() >= 400) {
-            throw java.io.IOException("Web trả về lỗi ${response.statusCode()}")
+            throw NoContentException("Web trả về lỗi ${response.statusCode()}")
         }
-        val doc = response.parse()
-        val chapter = parse(doc, response.url().toString())
+        val html = response.body()
+        return fromHtml(html, response.url().toString(), "tải trực tiếp")
+    }
+
+    /** Phân tích HTML (từ tải trực tiếp hoặc từ trình duyệt ẩn). */
+    fun fromHtml(html: String, url: String, source: String): Chapter {
+        saveDebug(html, url, source)
+        val chapter = parse(Jsoup.parse(html, url), url)
         if (chapter.paragraphs.sumOf { it.length } < 150) {
-            throw EndOfStoryException("Không tìm thấy nội dung chương (có thể đã hết truyện).")
+            throw NoContentException("Không tìm thấy nội dung chương")
         }
         return chapter
+    }
+
+    private fun saveDebug(html: String, url: String, source: String) {
+        val dir = debugDir ?: return
+        runCatching {
+            java.io.File(dir, "trang_vua_tai.txt")
+                .writeText("<!-- URL: $url | cách tải: $source -->\n$html")
+        }
     }
 
     fun parse(doc: Document, url: String): Chapter {
@@ -104,6 +126,10 @@ object ChapterFetcher {
         for (child in el.children()) {
             when (child.tagName()) {
                 "p", "span", "i", "em", "b", "strong", "font" -> score += child.text().length
+                // Mỗi đoạn văn là một <div> riêng (không chứa khối con)
+                "div" -> if (child.children().none { it.isBlock } && child.text().length < 3000) {
+                    score += child.text().length
+                }
             }
         }
         return score

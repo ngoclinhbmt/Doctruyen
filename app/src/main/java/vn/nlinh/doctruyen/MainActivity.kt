@@ -147,6 +147,7 @@ class MainActivity : AppCompatActivity() {
         b.btnPrev.setOnClickListener { sendIfActive(ReaderService.ACTION_PREV) }
         b.btnStop.setOnClickListener { sendIfActive(ReaderService.ACTION_STOP) }
         b.btnBattery.setOnClickListener { askIgnoreBattery() }
+        b.btnShareDebug.setOnClickListener { shareDebugPage() }
     }
 
     private fun sendIfActive(action: String) {
@@ -293,6 +294,22 @@ class MainActivity : AppCompatActivity() {
         }.onFailure {
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
+    }
+
+    /** Gửi HTML của trang vừa tải (để người hỗ trợ xem vì sao không đọc được). */
+    private fun shareDebugPage() {
+        val file = java.io.File(cacheDir, "trang_vua_tai.txt")
+        if (!file.exists()) {
+            toast("Chưa có trang nào được tải. Hãy bấm Đọc với link bị lỗi trước.")
+            return
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", file)
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .putExtra(Intent.EXTRA_SUBJECT, "Trang lỗi – Đọc Truyện")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        startActivity(Intent.createChooser(send, "Gửi trang lỗi"))
     }
 
     // ---------------- Tiện ích ----------------

@@ -273,6 +273,13 @@
             android:layout_marginTop="12dp"
             android:text="Cho phép chạy nền (tắt tối ưu pin)" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnShareDebug"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Gửi trang lỗi (khi app không đọc được web)" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
