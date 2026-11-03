@@ -96,7 +96,7 @@ object ChapterFetcher {
 
         doc.select("script, style, noscript, iframe, ins, svg, select, nav, header, footer").remove()
         // Chỉ bỏ nút/form nhỏ (có web bọc cả trang trong <form>, hoặc mỗi câu là một nút "nghe")
-        doc.select("button, form").filter { it.text().length < 40 }.forEach { it.remove() }
+        doc.select("button, form").toList().filter { it.text().length < 40 }.forEach { it.remove() }
 
         val content = findContent(doc)
         val primary = content?.let { extractParagraphs(it) } ?: emptyList()
@@ -230,7 +230,7 @@ object ChapterFetcher {
     private fun findLink(
         doc: Document, current: String, words: Set<String>, key: String, delta: Int,
     ): String? {
-        val links = doc.select("a[href]").filter { a ->
+        val links = doc.select("a[href]").toList().filter { a ->
             val href = a.attr("href").trim()
             href.isNotEmpty() && !href.startsWith("#") && !href.startsWith("javascript", true)
         }
