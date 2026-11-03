@@ -22,7 +22,15 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
+      - name: Đặt tên APK theo phiên bản + số build + commit
+        run: |
+          VER=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          NAME="DocTruyen-v${VER}-build${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          mkdir -p out
+          cp app/build/outputs/apk/debug/*.apk "out/${NAME}.apk"
+          echo "APK_NAME=${NAME}" >> "$GITHUB_ENV"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: DocTruyen-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: ${{ env.APK_NAME }}
+          path: out/*.apk

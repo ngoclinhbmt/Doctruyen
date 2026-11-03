@@ -204,9 +204,10 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         loadJob?.cancel()
         setState { copy(loading = true, active = true, status = "Đang tải chương…", url = url) }
         updateNotification()
+        val advancing = chapter?.nextUrl == url
         loadJob = scope.launch {
             try {
-                val ch = cache.remove(url) ?: fetchWithRetry(url)
+                val ch = cache.remove(url) ?: fetchOrSkip(url, allowSkip = advancing)
                 chapter = ch
                 chunks = buildChunks(ch)
                 index = startIndex.coerceIn(0, (chunks.size - 1).coerceAtLeast(0))
@@ -225,6 +226,8 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ChapterFetcher.EndOfStoryException) {
+                // Giữ lại chương đang đọc, để bấm Đọc không tải lại link lỗi
+                chapter?.let { c -> setState { copy(url = c.url, title = c.title) } }
                 finishStory(e.message ?: "Hết truyện")
             } catch (e: ChapterFetcher.NoContentException) {
                 if (startIndex == 0 && autoplay && chapter != null && chapter?.nextUrl == url) {
@@ -249,6 +252,39 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
                 updateNotification()
             }
         }
+    }
+
+    /**
+     * Tải chương; nếu web báo 404:
+     *  1) thử lại sau 3 giây (web đôi khi lỗi tạm thời)
+     *  2) thử link có/không có dấu "/" ở cuối
+     *  3) khi đang sang chương sau: thử nhảy qua tối đa 4 số chương (web bị thiếu chương)
+     */
+    private suspend fun fetchOrSkip(url: String, allowSkip: Boolean): Chapter {
+        try {
+            return fetchWithRetry(url)
+        } catch (e: ChapterFetcher.EndOfStoryException) {
+            // tiếp tục thử bên dưới
+        }
+        setState { copy(status = "Web báo không có chương này, đang thử lại…") }
+        delay(3000)
+        val alternatives = mutableListOf(url, if (url.endsWith("/")) url.dropLast(1) else "$url/")
+        if (allowSkip) {
+            for (k in 1..4) ChapterFetcher.guessByNumber(url, k)?.let { alternatives.add(it) }
+        }
+        for (alt in alternatives) {
+            try {
+                return fetchWithRetry(alt, showStatus = false)
+            } catch (e: ChapterFetcher.EndOfStoryException) {
+                continue
+            } catch (e: ChapterFetcher.NoContentException) {
+                continue
+            }
+        }
+        throw ChapterFetcher.EndOfStoryException(
+            "Web không có chương tiếp theo (lỗi 404). Có thể truyện trên web chỉ đăng tới đây, " +
+                "hoặc web đang lỗi. Mở link chương sau bằng Chrome để kiểm tra."
+        )
     }
 
     /**
