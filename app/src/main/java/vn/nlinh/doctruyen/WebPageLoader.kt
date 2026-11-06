@@ -97,6 +97,8 @@ class WebPageLoader(private val context: Context) {
             android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY),
         )
         wv.layout(0, 0, w, h)
+        android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+        android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
         wv.onResume()
         wv.resumeTimers()
         wv.settings.apply {

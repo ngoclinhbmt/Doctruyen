@@ -59,6 +59,13 @@
                 android:text="Đọc link này" />
         </LinearLayout>
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnOpenBrowser"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🌐 Mở trang trong app (đăng nhập / qua kiểm tra)" />
+
         <!-- Đã lưu -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardSaved"

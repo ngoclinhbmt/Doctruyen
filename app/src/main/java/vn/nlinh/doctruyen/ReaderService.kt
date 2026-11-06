@@ -238,14 +238,17 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
                 finishStory(e.message ?: "Hết truyện")
             } catch (e: ChapterFetcher.NoContentException) {
                 if (startIndex == 0 && autoplay && chapter != null && chapter?.nextUrl == url) {
-                    finishStory("Không tìm thấy chương tiếp theo – có thể đã hết truyện.")
+                    chapter?.let { c -> setState { copy(url = c.url, title = c.title) } }
+                    finishStory("Không đọc được chương sau (${e.message}). " +
+                        "Bấm \"Mở trang trong app\" để đăng nhập / qua kiểm tra rồi đọc tiếp.")
                 } else {
                     playing = false
                     releaseWakeLock()
                     setState {
                         copy(loading = false, playing = false,
                             status = "Không đọc được nội dung trang này (${e.message}). " +
-                                "Bấm \"Gửi trang lỗi\" để gửi cho người hỗ trợ.")
+                                "Bấm \"Mở trang trong app\" để đăng nhập / qua kiểm tra, " +
+                                "hoặc \"Gửi trang lỗi\" để báo lỗi.")
                     }
                     updateNotification()
                 }
@@ -302,7 +305,9 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         var directError: Exception? = null
         for (attempt in 0 until 2) {
             try {
-                return withContext(Dispatchers.IO) { ChapterFetcher.fetch(url) }
+                val cookie = runCatching { android.webkit.CookieManager.getInstance().getCookie(url) }.getOrNull()
+                val ua = runCatching { android.webkit.WebSettings.getDefaultUserAgent(this@ReaderService) }.getOrNull()
+                return withContext(Dispatchers.IO) { ChapterFetcher.fetch(url, cookie, ua) }
             } catch (e: ChapterFetcher.EndOfStoryException) {
                 throw e
             } catch (e: CancellationException) {

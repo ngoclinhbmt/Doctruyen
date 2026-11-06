@@ -54,9 +54,12 @@ object ChapterFetcher {
     @Volatile var debugDir: java.io.File? = null
 
     /** Cách 1: tải trực tiếp (nhanh). */
-    fun fetch(url: String): Chapter {
-        val response = Jsoup.connect(url)
-            .userAgent(USER_AGENT)
+    fun fetch(url: String, cookie: String? = null, userAgent: String? = null): Chapter {
+        val conn = Jsoup.connect(url)
+            .userAgent(userAgent ?: USER_AGENT)
+        // Dùng chung cookie đăng nhập với trình duyệt trong app
+        if (!cookie.isNullOrBlank()) conn.header("Cookie", cookie)
+        val response = conn
             .timeout(25_000)
             .followRedirects(true)
             .ignoreHttpErrors(true)
@@ -76,7 +79,15 @@ object ChapterFetcher {
         saveDebug(html, url, source)
         val chapter = parse(Jsoup.parse(html, url), url)
         if (chapter.paragraphs.sumOf { it.length } < 150) {
-            throw NoContentException("Không tìm thấy nội dung chương")
+            val text = Jsoup.parse(html).text().lowercase()
+            val reason = when {
+                text.contains("just a moment") || text.contains("checking your browser") ||
+                    text.contains("verify you are human") -> "web đang chặn bằng trang kiểm tra"
+                text.contains("đăng nhập") && (text.contains("để đọc") || text.contains("để xem") ||
+                    text.contains("mở khóa") || text.contains("vip")) -> "chương cần đăng nhập / mở khóa"
+                else -> "không thấy chữ truyện trong trang"
+            }
+            throw NoContentException(reason)
         }
         return chapter
     }

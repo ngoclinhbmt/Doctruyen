@@ -148,6 +148,11 @@ class MainActivity : AppCompatActivity() {
         b.btnStop.setOnClickListener { sendIfActive(ReaderService.ACTION_STOP) }
         b.btnBattery.setOnClickListener { askIgnoreBattery() }
         b.btnShareDebug.setOnClickListener { shareDebugPage() }
+        b.btnOpenBrowser.setOnClickListener {
+            val url = extractUrl(b.etUrl.text?.toString().orEmpty()) ?: prefs.savedUrl
+            startActivity(Intent(this, BrowserActivity::class.java)
+                .putExtra(BrowserActivity.EXTRA_URL, url))
+        }
     }
 
     private fun sendIfActive(action: String) {
