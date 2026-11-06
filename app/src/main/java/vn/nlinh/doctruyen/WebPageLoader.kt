@@ -20,7 +20,7 @@ class WebPageLoader(private val context: Context) {
 
     data class Result(val html: String, val finalUrl: String)
 
-    suspend fun load(url: String, timeoutMs: Long = 35_000): Result = withTimeout(timeoutMs) {
+    suspend fun load(url: String, timeoutMs: Long = 45_000): Result = withTimeout(timeoutMs) {
         suspendCancellableCoroutine { cont ->
             val handler = Handler(Looper.getMainLooper())
             val wv = createWebView()
@@ -88,6 +88,17 @@ class WebPageLoader(private val context: Context) {
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
         val wv = WebView(context.applicationContext)
+        // WebView chạy ngầm có kích thước 0x0 → web "tải khi cuộn tới" không hiện chữ.
+        // Cho nó kích thước màn hình điện thoại và luôn chạy JavaScript.
+        val w = 1080
+        val h = 2400
+        wv.measure(
+            android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
+            android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY),
+        )
+        wv.layout(0, 0, w, h)
+        wv.onResume()
+        wv.resumeTimers()
         wv.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true

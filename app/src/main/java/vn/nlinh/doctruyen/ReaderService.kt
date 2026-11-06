@@ -26,6 +26,8 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -77,7 +79,9 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val handler = Handler(Looper.getMainLooper())
     private var loadJob: Job? = null
-    private val cache = HashMap<String, Chapter>()
+    /** Chương đã tải sẵn (tối đa 4) và các lần tải sẵn đang chạy. */
+    private val cache = LinkedHashMap<String, Chapter>()
+    private val prefetchJobs = HashMap<String, Deferred<Chapter?>>()
 
     private var chapter: Chapter? = null
     private var chunks: List<String> = emptyList()
@@ -207,7 +211,10 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         val advancing = chapter?.nextUrl == url
         loadJob = scope.launch {
             try {
-                val ch = cache.remove(url) ?: fetchOrSkip(url, allowSkip = advancing)
+                val pending = prefetchJobs.remove(url)
+                val ch = cache.remove(url)
+                    ?: pending?.await()
+                    ?: fetchWithAutoRetry(url, advancing)
                 chapter = ch
                 chunks = buildChunks(ch)
                 index = startIndex.coerceIn(0, (chunks.size - 1).coerceAtLeast(0))
@@ -309,21 +316,62 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
             }
         }
         if (showStatus) setState { copy(status = "Đang mở trang bằng trình duyệt ẩn…") }
-        val page = try {
-            webLoader.load(url)
-        } catch (e: TimeoutCancellationException) {
-            throw directError ?: ChapterFetcher.NoContentException("Trang tải quá lâu")
+        var webError: Exception? = null
+        for (attempt in 0 until 2) {
+            try {
+                val page = webLoader.load(url)
+                return withContext(Dispatchers.Default) {
+                    ChapterFetcher.fromHtml(page.html, page.finalUrl, "trình duyệt ẩn")
+                }
+            } catch (e: TimeoutCancellationException) {
+                webError = ChapterFetcher.NoContentException("Trang tải quá lâu")
+            } catch (e: ChapterFetcher.NoContentException) {
+                // Lần 2 thường qua được trang kiểm tra (đã có cookie)
+                webError = e
+            }
         }
-        return withContext(Dispatchers.Default) {
-            ChapterFetcher.fromHtml(page.html, page.finalUrl, "trình duyệt ẩn")
+        throw webError ?: directError ?: ChapterFetcher.NoContentException("Không tải được trang")
+    }
+
+    /** Đang sang chương sau mà lỗi mạng/web: tự thử lại 3 lần, mỗi lần cách 20 giây. */
+    private suspend fun fetchWithAutoRetry(url: String, advancing: Boolean): Chapter {
+        var attempt = 0
+        while (true) {
+            try {
+                return fetchOrSkip(url, allowSkip = advancing)
+            } catch (e: ChapterFetcher.EndOfStoryException) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                attempt++
+                if (!advancing || attempt >= 3) throw e
+                setState { copy(status = "Tải chương lỗi, tự thử lại sau 20 giây (lần $attempt/3)…") }
+                delay(20_000)
+            }
         }
     }
 
-    private fun prefetch(url: String?) {
-        if (url == null || cache.containsKey(url)) return
+    /** Tải sẵn chương sau và chương sau nữa trong lúc đang đọc. */
+    private fun prefetch(url: String?, depth: Int = 2) {
+        if (url == null || depth <= 0) return
+        cache[url]?.let {
+            prefetch(it.nextUrl, depth - 1)
+            return
+        }
+        if (prefetchJobs[url]?.isActive == true) return
+        val job = scope.async {
+            runCatching { fetchWithRetry(url, showStatus = false) }.getOrNull()
+        }
+        prefetchJobs[url] = job
         scope.launch {
-            runCatching { fetchWithRetry(url, showStatus = false) }
-                .onSuccess { cache.clear(); cache[url] = it }
+            val ch = job.await()
+            if (prefetchJobs[url] === job) prefetchJobs.remove(url)
+            if (ch != null) {
+                cache[url] = ch
+                while (cache.size > 4) cache.remove(cache.keys.first())
+                prefetch(ch.nextUrl, depth - 1)
+            }
         }
     }
 
@@ -369,6 +417,8 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
 
     private fun speakCurrent() {
         if (!playing || index >= chunks.size) return
+        // Nếu lần tải sẵn trước bị lỗi: thử tải sẵn lại ở giữa chương và gần cuối chương
+        if (index == chunks.size / 2 || index == chunks.size - 3) prefetch(chapter?.nextUrl)
         applyVoiceSettings()
         val text = chunks[index]
         prefs.saveProgress(chapter?.url ?: "", index, chapter?.title ?: "")
