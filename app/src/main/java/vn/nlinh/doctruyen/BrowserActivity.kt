@@ -12,6 +12,7 @@ import android.webkit.WebViewClient
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.bundleOf
@@ -91,6 +92,8 @@ class BrowserActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 tvUrl.text = url.orEmpty()
                 CookieManager.getInstance().flush()
+                // Chờ trang hiện xong (web dùng JavaScript) rồi mới nhận diện truyện
+                web.postDelayed({ detectBook() }, 1500)
             }
         }
         web.webChromeClient = object : WebChromeClient() {
@@ -109,6 +112,49 @@ class BrowserActivity : AppCompatActivity() {
         val url = intent.getStringExtra(EXTRA_URL).orEmpty().ifBlank { "https://www.google.com" }
         tvUrl.text = url
         web.loadUrl(url)
+    }
+
+    /**
+     * Tự thêm truyện vào Ngăn tủ khi:
+     *  - đang mở trang giới thiệu truyện (có nhiều link .../ten-truyen/chuong-N), hoặc
+     *  - đang mở một chương truyện.
+     */
+    private fun detectBook() {
+        if (isFinishing) return
+        val js = """
+            (function(){
+              var u = location.href.split('#')[0].split('?')[0];
+              var chapRe = /(chuong|chapter|chap)-\d+/i;
+              var isChap = chapRe.test(u);
+              var base = isChap ? u.replace(/\/?(chuong|chapter|chap)-\d+.*${'$'}/i, '/') : (u.endsWith('/') ? u : u + '/');
+              var links = Array.prototype.map.call(document.querySelectorAll('a[href]'), function(a){ return a; });
+              var chaps = links.filter(function(a){ return a.href.indexOf(base) === 0 && chapRe.test(a.href); });
+              var first = chaps.map(function(a){ return a.href; })
+                  .find(function(h){ return /(chuong|chapter|chap)-1(\D|${'$'})/i.test(h); }) || '';
+              var storyLink = links.find(function(a){ return a.href.replace(/\/${'$'}/, '') === base.replace(/\/${'$'}/, ''); });
+              var h1 = document.querySelector('h1');
+              var title = (storyLink && storyLink.innerText.trim().length > 3 && !chapRe.test(storyLink.innerText) ? storyLink.innerText.trim()
+                          : (h1 ? h1.innerText.trim() : document.title));
+              return JSON.stringify({isChap: isChap, base: base, count: chaps.length, first: first, title: title});
+            })()
+        """.trimIndent()
+        web.evaluateJavascript(js) { raw ->
+            val o = runCatching {
+                org.json.JSONObject(org.json.JSONArray("[$raw]").getString(0))
+            }.getOrNull() ?: return@evaluateJavascript
+            val isChap = o.optBoolean("isChap")
+            val count = o.optInt("count")
+            val base = o.optString("base")
+            // Trang truyện cần có ít nhất 3 link chương; trang chương thì luôn nhận
+            if (!isChap && count < 3) return@evaluateJavascript
+            if (base.count { it == '/' } < 4) return@evaluateJavascript // chỉ là trang chủ
+            val title = o.optString("title").lines().firstOrNull().orEmpty().trim().take(150)
+            val first = if (isChap) (web.url ?: "") else o.optString("first")
+            Library.init(this)
+            if (Library.addBook(base, title, first)) {
+                Toast.makeText(this, "📚 Đã thêm vào Ngăn tủ: $title", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun readCurrent() {

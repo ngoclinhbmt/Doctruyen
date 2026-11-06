@@ -12,6 +12,8 @@ data class Chapter(
     val paragraphs: List<String>,
     val nextUrl: String?,
     val prevUrl: String?,
+    /** Tên truyện (để hiện trong Ngăn tủ) */
+    val storyTitle: String = "",
 )
 
 /** Tải một trang chương truyện và tách: tiêu đề, nội dung, link chương sau/trước. */
@@ -102,6 +104,7 @@ object ChapterFetcher {
 
     fun parse(doc: Document, url: String): Chapter {
         val title = findTitle(doc)
+        val storyTitle = findStoryTitle(doc, url)
         val next = findLink(doc, url, NEXT_WORDS, "next", +1) ?: guessByNumber(url, +1)
         val prev = findLink(doc, url, PREV_WORDS, "prev", -1) ?: guessByNumber(url, -1)
 
@@ -114,7 +117,7 @@ object ChapterFetcher {
         val fallback = clusterFallback(doc.body())
         val paragraphs =
             if (primary.sumOf { it.length } < fallback.sumOf { it.length } * 0.6) fallback else primary
-        return Chapter(url, title, paragraphs, next?.takeIf { it != url }, prev?.takeIf { it != url })
+        return Chapter(url, title, paragraphs, next?.takeIf { it != url }, prev?.takeIf { it != url }, storyTitle)
     }
 
     // ---------------- Nội dung ----------------
@@ -226,6 +229,25 @@ object ChapterFetcher {
 
     // ---------------- Tiêu đề ----------------
 
+    private val CHAPTER_RE = Regex("(?i)(chương|chapter|chap|hồi)\\s*\\d+")
+
+    /** Tên truyện: chữ của link trỏ về trang truyện, hoặc thẻ h1 không phải tên chương. */
+    private fun findStoryTitle(doc: Document, url: String): String {
+        val base = Library.storyUrlOf(url)?.trimEnd('/')
+        if (base != null) {
+            for (a in doc.select("a[href]")) {
+                if (a.absUrl("href").trimEnd('/') != base) continue
+                val t = cleanText(a.text())
+                if (t.length in 4..150 && !CHAPTER_RE.containsMatchIn(t)) return t
+            }
+        }
+        for (el in doc.select("h1, .story-title, .truyen-title")) {
+            val t = cleanText(el.text())
+            if (t.length in 4..150 && !CHAPTER_RE.containsMatchIn(t)) return t
+        }
+        return ""
+    }
+
     private fun findTitle(doc: Document): String {
         val chapRe = Regex("(?i)(chương|chapter|chap|hồi)\\s*\\d+")
         for (el in doc.select(".chapter-title, h1, h2, h3")) {
@@ -278,6 +300,12 @@ object ChapterFetcher {
     private fun chapterNumber(url: String): Int? =
         Regex("(chuong|chapter|chap|c)-(\\d+)", RegexOption.IGNORE_CASE)
             .findAll(url).lastOrNull()?.groupValues?.get(2)?.toIntOrNull()
+
+    /** "…/chuong-51/" → "Chương 51" (để hiện tiến độ) */
+    fun guessTitleFromUrl(url: String?): String {
+        val m = Regex("(?i)(chuong|chapter|chap)-(\\d+)").findAll(url.orEmpty()).lastOrNull()
+        return if (m != null) "Chương ${m.groupValues[2]}" else "chương"
+    }
 
     /** Dự phòng: .../chuong-5/ → .../chuong-6/ */
     fun guessByNumber(url: String, delta: Int): String? {

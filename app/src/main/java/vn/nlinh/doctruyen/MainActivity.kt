@@ -24,7 +24,15 @@ import androidx.core.os.bundleOf
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import android.view.ViewGroup
+import android.widget.LinearLayout
+import android.widget.TextView
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.tabs.TabLayout
 import vn.nlinh.doctruyen.databinding.ActivityMainBinding
 import java.util.Locale
 
@@ -50,8 +58,10 @@ class MainActivity : AppCompatActivity() {
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
         prefs = Prefs(this)
+        Library.init(this)
 
         askNotificationPermission()
+        setupTabs()
         setupUrl()
         setupControls()
         setupVoiceSettings()
@@ -161,6 +171,140 @@ class MainActivity : AppCompatActivity() {
     }
 
     @SuppressLint("SetTextI18n")
+    // ---------------- Tab + Ngăn tủ ----------------
+
+    private fun setupTabs() {
+        b.tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) = showPage(tab.position)
+            override fun onTabUnselected(tab: TabLayout.Tab) {}
+            override fun onTabReselected(tab: TabLayout.Tab) {}
+        })
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                combine(Library.books, Library.downloads) { books, dl -> books to dl }
+                    .collect { (books, dl) -> renderShelf(books, dl) }
+            }
+        }
+    }
+
+    private fun showPage(position: Int) {
+        b.readerPage.visibility = if (position == 0) View.VISIBLE else View.GONE
+        b.shelfPage.visibility = if (position == 1) View.VISIBLE else View.GONE
+        if (position == 1) renderShelf(Library.books.value, Library.downloads.value)
+    }
+
+    private fun selectTab(position: Int) {
+        b.tabs.getTabAt(position)?.select()
+        showPage(position)
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun renderShelf(books: List<Book>, downloads: Map<String, DownloadInfo>) {
+        if (b.shelfPage.visibility != View.VISIBLE) return
+        b.tvShelfEmpty.visibility = if (books.isEmpty()) View.VISIBLE else View.GONE
+        val list = b.shelfList
+        list.removeAllViews()
+        for (book in books) list.addView(bookCard(book, downloads[book.id]))
+    }
+
+    private fun bookCard(book: Book, dl: DownloadInfo?): View {
+        val card = MaterialCardView(this, null, com.google.android.material.R.attr.materialCardViewOutlinedStyle)
+        card.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(12) }
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(8))
+        }
+        box.addView(TextView(this).apply {
+            text = book.title
+            textSize = 17f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        val progress = if (book.chapterUrl.isBlank()) "Chưa đọc"
+        else "Đang đọc: ${book.chapterTitle.ifBlank { ChapterFetcher.guessTitleFromUrl(book.chapterUrl) }} – đoạn ${book.index + 1}"
+        box.addView(TextView(this).apply {
+            text = progress
+            textSize = 14f
+            setPadding(0, dp(4), 0, 0)
+        })
+        val offline = Library.offlineCount(book.id)
+        val dlText = dl?.text.orEmpty()
+        box.addView(TextView(this).apply {
+            text = buildString {
+                append("💾 $offline chương offline")
+                if (dlText.isNotBlank()) append("\n").append(dlText)
+            }
+            textSize = 13f
+            alpha = 0.8f
+            setPadding(0, dp(2), 0, dp(6))
+        })
+
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val lp = { w: Float -> LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, w).apply { marginEnd = dp(6) } }
+        row.addView(MaterialButton(this).apply {
+            text = "▶ Đọc tiếp"
+            setOnClickListener { readBook(book) }
+        }, lp(1.2f))
+        val downloading = dl?.running == true
+        row.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = if (downloading) "⏹ Dừng tải" else "⬇ Tải offline"
+            setOnClickListener {
+                if (downloading) DownloadService.cancel(this@MainActivity, book.id) else askDownload(book)
+            }
+        }, lp(1.2f))
+        row.addView(MaterialButton(this, null, androidx.appcompat.R.attr.borderlessButtonStyle).apply {
+            text = "🗑"
+            setOnClickListener { askDelete(book, offline) }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        box.addView(row)
+        card.addView(box)
+        return card
+    }
+
+    private fun readBook(book: Book) {
+        val url = book.chapterUrl.ifBlank { Library.guessFirstChapter(book.storyUrl) }
+        val idx = if (book.chapterUrl.isBlank()) 0 else book.index
+        b.etUrl.setText(url)
+        ReaderService.send(this, ReaderService.ACTION_START,
+            bundleOf(ReaderService.EXTRA_URL to url, ReaderService.EXTRA_INDEX to idx))
+        selectTab(0)
+    }
+
+    private fun askDownload(book: Book) {
+        val first = Library.guessFirstChapter(book.storyUrl, book.chapterUrl.ifBlank { null })
+        val options = mutableListOf<Pair<String, String>>()
+        if (book.chapterUrl.isNotBlank()) {
+            options.add("Từ chương đang đọc (${ChapterFetcher.guessTitleFromUrl(book.chapterUrl)}) đến hết" to book.chapterUrl)
+        }
+        options.add("Từ chương 1 đến hết" to first)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Tải offline: ${book.title}")
+            .setItems(options.map { it.first }.toTypedArray()) { _, which ->
+                DownloadService.start(this, book.id, options[which].second)
+                toast("Bắt đầu tải. Xem tiến độ ở thanh thông báo hoặc trong Ngăn tủ.")
+            }
+            .setNegativeButton("Huỷ", null)
+            .show()
+    }
+
+    private fun askDelete(book: Book, offline: Int) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Xoá \"${book.title}\"?")
+            .setMessage("Xoá khỏi Ngăn tủ" + if (offline > 0) " và xoá $offline chương đã tải offline." else ".")
+            .setPositiveButton("Xoá") { _, _ ->
+                if (Library.downloads.value[book.id]?.running == true) {
+                    DownloadService.cancel(this, book.id)
+                }
+                Library.removeBook(book.id)
+                Library.setDownload(book.id, null)
+            }
+            .setNegativeButton("Huỷ", null)
+            .show()
+    }
+
     private fun observeState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {

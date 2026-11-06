@@ -9,6 +9,8 @@
 - Điều khiển trên thanh thông báo: Trước / Dừng / Sau
 - Tự dừng khi có cuộc gọi hoặc khi rút tai nghe
 - Tự sửa chữ chống copy kiểu "gϊếŧ" → "giết"
+- **Ngăn tủ**: lưu các truyện và chương đang đọc; mở trang truyện bằng 🌐 *Mở trang trong app* là tự thêm vào
+- **Tải offline**: tải từ chương đang đọc (hoặc chương 1) đến hết truyện, đọc không cần mạng
 
 ## Build APK bằng GitHub (không cần máy tính mạnh)
 1. Tạo repository mới trên GitHub (Public hoặc Private).

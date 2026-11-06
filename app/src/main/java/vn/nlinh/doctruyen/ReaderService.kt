@@ -72,6 +72,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
 
     private lateinit var prefs: Prefs
     private lateinit var webLoader: WebPageLoader
+    private lateinit var loader: ChapterLoader
     private lateinit var tts: TextToSpeech
     private var ttsReady = false
     private var pendingAction: (() -> Unit)? = null
@@ -111,6 +112,8 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         super.onCreate()
         prefs = Prefs(this)
         webLoader = WebPageLoader(this)
+        loader = ChapterLoader(this, webLoader)
+        Library.init(this)
         ChapterFetcher.debugDir = cacheDir
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         createChannel()
@@ -220,6 +223,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
                 index = startIndex.coerceIn(0, (chunks.size - 1).coerceAtLeast(0))
                 errorCount = 0
                 prefs.saveProgress(ch.url, index, ch.title)
+                Library.updateProgress(ch, index)
                 setState {
                     copy(
                         loading = false, title = ch.title, url = ch.url,
@@ -302,40 +306,13 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
      * Cách 2: mở bằng trình duyệt ẩn, chờ JavaScript chạy xong rồi đọc.
      */
     private suspend fun fetchWithRetry(url: String, showStatus: Boolean = true): Chapter {
-        var directError: Exception? = null
-        for (attempt in 0 until 2) {
-            try {
-                val cookie = runCatching { android.webkit.CookieManager.getInstance().getCookie(url) }.getOrNull()
-                val ua = runCatching { android.webkit.WebSettings.getDefaultUserAgent(this@ReaderService) }.getOrNull()
-                return withContext(Dispatchers.IO) { ChapterFetcher.fetch(url, cookie, ua) }
-            } catch (e: ChapterFetcher.EndOfStoryException) {
-                throw e
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: ChapterFetcher.NoContentException) {
-                directError = e
-                break
-            } catch (e: Exception) {
-                directError = e
-                delay(1500L * (attempt + 1))
-            }
+        // Có bản offline thì đọc luôn, không cần mạng
+        Library.loadOffline(url)?.let { return it }
+        val ch = loader.fetch(url) {
+            if (showStatus) setState { copy(status = "Đang mở trang bằng trình duyệt ẩn…") }
         }
-        if (showStatus) setState { copy(status = "Đang mở trang bằng trình duyệt ẩn…") }
-        var webError: Exception? = null
-        for (attempt in 0 until 2) {
-            try {
-                val page = webLoader.load(url)
-                return withContext(Dispatchers.Default) {
-                    ChapterFetcher.fromHtml(page.html, page.finalUrl, "trình duyệt ẩn")
-                }
-            } catch (e: TimeoutCancellationException) {
-                webError = ChapterFetcher.NoContentException("Trang tải quá lâu")
-            } catch (e: ChapterFetcher.NoContentException) {
-                // Lần 2 thường qua được trang kiểm tra (đã có cookie)
-                webError = e
-            }
-        }
-        throw webError ?: directError ?: ChapterFetcher.NoContentException("Không tải được trang")
+        Library.saveOffline(ch)
+        return ch
     }
 
     /** Đang sang chương sau mà lỗi mạng/web: tự thử lại 3 lần, mỗi lần cách 20 giây. */
@@ -427,6 +404,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         applyVoiceSettings()
         val text = chunks[index]
         prefs.saveProgress(chapter?.url ?: "", index, chapter?.title ?: "")
+        chapter?.let { Library.updateProgress(it, index) }
         setState {
             copy(playing = true, loading = false, index = index, total = chunks.size,
                 current = text, status = "Đang đọc")

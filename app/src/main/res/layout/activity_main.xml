@@ -1,6 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/tabs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:tabMode="fixed"
+        app:tabGravity="fill">
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📖 Đang đọc" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📚 Ngăn tủ" />
+    </com.google.android.material.tabs.TabLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+<ScrollView
+    android:id="@+id/readerPage"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true">
@@ -296,3 +325,35 @@
             android:textSize="13sp" />
     </LinearLayout>
 </ScrollView>
+
+        <ScrollView
+            android:id="@+id/shelfPage"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:id="@+id/tvShelfEmpty"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:alpha="0.75"
+                    android:lineSpacingMultiplier="1.2"
+                    android:text="Ngăn tủ đang trống.\n\nBấm 🌐 Mở trang trong app, vào trang giới thiệu truyện hoặc một chương bất kỳ, truyện sẽ tự được thêm vào đây. Truyện đang đọc cũng tự được thêm."
+                    android:textSize="15sp" />
+
+                <LinearLayout
+                    android:id="@+id/shelfList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+</LinearLayout>
