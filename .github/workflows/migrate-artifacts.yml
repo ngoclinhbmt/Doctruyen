@@ -1,0 +1,47 @@
+name: Chuyển artifact cũ sang Releases
+
+# Chạy tay (tab Actions → workflow này → Run workflow).
+# Mỗi artifact: chép APK sang GitHub Releases (nếu chưa có), xác nhận release tồn tại, rồi mới xoá artifact
+# để giải phóng dung lượng Actions (0,5 GB).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Chép artifact sang Releases rồi xoá artifact
+        run: |
+          gh api --paginate "repos/$REPO/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired | not) | [.id, .name, .workflow_run.head_sha] | @tsv' > list.txt
+          cat list.txt
+          while IFS=$'\t' read -r id name sha; do
+            tag="$name"
+            # Artifact cũ có tên trùng nhau → thêm commit vào tên
+            case "$name" in *-apk) tag="${name}-${sha:0:7}";; esac
+            if ! gh release view "$tag" -R "$REPO" >/dev/null 2>&1; then
+              rm -rf x a.zip && mkdir x
+              gh api "repos/$REPO/actions/artifacts/$id/zip" > a.zip
+              unzip -qo a.zip -d x
+              apk=$(find x -name '*.apk' | head -1)
+              if [ -z "$apk" ]; then echo "::warning::$name không có APK, giữ nguyên"; continue; fi
+              cp "$apk" "$tag.apk"
+              gh release create "$tag" "$tag.apk" -R "$REPO" --title "$tag" --target "$sha" --prerelease \
+                  --notes "Chuyển từ artifact cũ (commit $sha)" \
+                || gh release create "$tag" "$tag.apk" -R "$REPO" --title "$tag" --prerelease \
+                  --notes "Chuyển từ artifact cũ (commit $sha — commit không còn trên nhánh)"
+              rm -f "$tag.apk"
+            fi
+            if gh release view "$tag" -R "$REPO" >/dev/null 2>&1; then
+              gh api -X DELETE "repos/$REPO/actions/artifacts/$id" && echo "Đã chuyển + xoá: $tag"
+            else
+              echo "::warning::Chưa tạo được release $tag, giữ artifact"
+            fi
+          done < list.txt
