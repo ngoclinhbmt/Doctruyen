@@ -33,6 +33,11 @@ class Prefs(context: Context) {
         get() = sp.getFloat("pitch", 1.0f)
         set(v) = sp.edit().putFloat("pitch", v).apply()
 
+    /** Các web luôn đọc bằng trình duyệt ẩn (theo thứ tự hiển thị) – dùng khi đoạn bị lộn xộn */
+    var renderHosts: Set<String>
+        get() = sp.getStringSet("render_hosts", emptySet())?.toSet() ?: emptySet()
+        set(v) = sp.edit().putStringSet("render_hosts", v).apply()
+
     fun saveProgress(url: String, index: Int, title: String) {
         sp.edit().putString("url", url).putInt("index", index).putString("title", title).apply()
     }

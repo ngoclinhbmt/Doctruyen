@@ -158,10 +158,43 @@ class MainActivity : AppCompatActivity() {
         b.btnStop.setOnClickListener { sendIfActive(ReaderService.ACTION_STOP) }
         b.btnBattery.setOnClickListener { askIgnoreBattery() }
         b.btnShareDebug.setOnClickListener { shareDebugPage() }
+        b.btnRenderMode.setOnClickListener { toggleRenderMode() }
         b.btnOpenBrowser.setOnClickListener {
             val url = extractUrl(b.etUrl.text?.toString().orEmpty()) ?: prefs.savedUrl
             startActivity(Intent(this, BrowserActivity::class.java)
                 .putExtra(BrowserActivity.EXTRA_URL, url))
+        }
+    }
+
+    private fun currentHost(): String? {
+        val url = ReaderState.state.value.url.ifBlank { extractUrl(b.etUrl.text?.toString().orEmpty()).orEmpty() }
+        return runCatching { java.net.URI(url).host }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun updateRenderButton() {
+        val host = currentHost()
+        val on = host != null && host in prefs.renderHosts
+        b.btnRenderMode.text = if (on) "✅ $host: đang đọc theo thứ tự hiển thị (bấm để tắt)"
+        else "🔀 Đoạn bị lộn xộn? Đọc web này theo thứ tự hiển thị"
+    }
+
+    /**
+     * Bật/tắt: web này luôn đọc bằng trình duyệt ẩn, lấy chữ theo đúng thứ tự hiện trên màn hình.
+     * Xoá các chương đã lưu của truyện (có thể đang sai thứ tự) rồi đọc lại chương hiện tại.
+     */
+    private fun toggleRenderMode() {
+        val host = currentHost() ?: run { toast("Hãy dán link chương trước"); return }
+        val on = host !in prefs.renderHosts
+        prefs.renderHosts = if (on) prefs.renderHosts + host else prefs.renderHosts - host
+        val url = ReaderState.state.value.url.ifBlank { extractUrl(b.etUrl.text?.toString().orEmpty()).orEmpty() }
+        Library.storyUrlOf(url)?.let { Library.clearOffline(Library.bookId(it)) }
+        updateRenderButton()
+        toast(if (on) "Đã bật cho $host. Đọc lại chương này từ đầu…" else "Đã tắt cho $host.")
+        if (url.isNotBlank()) {
+            ReaderService.send(this, ReaderService.ACTION_START, bundleOf(
+                ReaderService.EXTRA_URL to url, ReaderService.EXTRA_INDEX to 0,
+                ReaderService.EXTRA_FRESH to true,
+            ))
         }
     }
 
@@ -324,6 +357,7 @@ class MainActivity : AppCompatActivity() {
                         if (b.etUrl.text?.toString() != s.url) b.etUrl.setText(s.url)
                     }
                     refreshSaved()
+                    updateRenderButton()
                 }
             }
         }

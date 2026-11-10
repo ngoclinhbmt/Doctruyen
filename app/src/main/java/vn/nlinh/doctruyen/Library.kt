@@ -171,6 +171,11 @@ object Library {
         return File(dir, sha1(url.trimEnd('/')) + ".json")
     }
 
+    /** Xoá các chương đã lưu của một truyện (vd khi đổi cách đọc web) */
+    fun clearOffline(bookId: String) {
+        bookDir(bookId)?.deleteRecursively()
+    }
+
     fun isOffline(url: String): Boolean = chapterFile(url)?.exists() == true
 
     fun offlineCount(bookId: String): Int =

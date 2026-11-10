@@ -18,7 +18,9 @@ class ChapterLoader(private val context: Context, private val webLoader: WebPage
 
     suspend fun fetch(url: String, onWebView: (() -> Unit)? = null): Chapter {
         var directError: Exception? = null
-        for (attempt in 0 until 2) {
+        val host = runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
+        val forceRender = host in Prefs(context).renderHosts
+        for (attempt in 0 until (if (forceRender) 0 else 2)) {
             try {
                 val cookie = runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()
                 val ua = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull()
@@ -41,7 +43,7 @@ class ChapterLoader(private val context: Context, private val webLoader: WebPage
             try {
                 val page = webLoader.load(url)
                 return withContext(Dispatchers.Default) {
-                    ChapterFetcher.fromHtml(page.html, page.finalUrl, "trình duyệt ẩn")
+                    ChapterFetcher.fromHtml(page.html, page.finalUrl, "trình duyệt ẩn", page.lines)
                 }
             } catch (e: TimeoutCancellationException) {
                 webError = ChapterFetcher.NoContentException("trang tải quá lâu")

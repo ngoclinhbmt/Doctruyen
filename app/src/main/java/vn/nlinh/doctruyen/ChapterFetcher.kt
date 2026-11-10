@@ -77,9 +77,19 @@ object ChapterFetcher {
     }
 
     /** Phân tích HTML (từ tải trực tiếp hoặc từ trình duyệt ẩn). */
-    fun fromHtml(html: String, url: String, source: String): Chapter {
+    fun fromHtml(html: String, url: String, source: String, renderedLines: List<String> = emptyList()): Chapter {
         saveDebug(html, url, source)
-        val chapter = parse(Jsoup.parse(html, url), url)
+        var chapter = parse(Jsoup.parse(html, url), url)
+        // Có chữ theo thứ tự hiển thị (từ trình duyệt ẩn) → ưu tiên dùng, vì đúng thứ tự
+        // người đọc thấy và đã bỏ các đoạn bị ẩn
+        if (renderedLines.isNotEmpty()) {
+            val rendered = cutAtNextChapter(
+                clusterLines(renderedLines.map { cleanText(it) }.filter { it.isNotBlank() && !isJunk(it) }),
+                url, chapter.title,
+            )
+            val domLen = chapter.paragraphs.sumOf { it.length }
+            if (rendered.sumOf { it.length } >= domLen * 0.5) chapter = chapter.copy(paragraphs = rendered)
+        }
         if (chapter.paragraphs.sumOf { it.length } < 150) {
             val text = Jsoup.parse(html).text().lowercase()
             val reason = when {
@@ -115,8 +125,10 @@ object ChapterFetcher {
         val content = findContent(doc)
         val primary = content?.let { extractParagraphs(it) } ?: emptyList()
         val fallback = clusterFallback(doc.body())
-        val paragraphs =
-            if (primary.sumOf { it.length } < fallback.sumOf { it.length } * 0.6) fallback else primary
+        val paragraphs = cutAtNextChapter(
+            if (primary.sumOf { it.length } < fallback.sumOf { it.length } * 0.6) fallback else primary,
+            url, title,
+        )
         return Chapter(url, title, paragraphs, next?.takeIf { it != url }, prev?.takeIf { it != url }, storyTitle)
     }
 
@@ -157,6 +169,10 @@ object ChapterFetcher {
     private fun extractParagraphs(content: Element): List<String> {
         val el = content.clone()
         el.select("a, ul, ol, h1, h2, h3, .ads, .ad, [class*=banner], [id*=ads]").remove()
+        // Bỏ đoạn bị ẩn bằng style ngay trong thẻ (chống sao chép)
+        el.select("[style]").toList().filter { isHiddenStyle(it.attr("style")) }.forEach { it.remove() }
+        // Web xáo trộn đoạn rồi sắp lại bằng CSS "order: N" → sắp lại theo order
+        reorderByCssOrder(el)
         el.select("br").forEach { it.after(TextNode("\n")) }
         el.select("p, div, li, section, article, main, td, tr, blockquote, h4, h5, h6").forEach {
             it.prependText("\n")
@@ -174,7 +190,10 @@ object ChapterFetcher {
      */
     private fun clusterFallback(body: Element?): List<String> {
         if (body == null) return emptyList()
-        val lines = extractParagraphs(body)
+        return clusterLines(extractParagraphs(body))
+    }
+
+    private fun clusterLines(lines: List<String>): List<String> {
         val longLen = 30
         var bestStart = -1
         var bestEnd = -1
@@ -205,6 +224,43 @@ object ChapterFetcher {
             i = last + 1
         }
         return if (bestStart >= 0) lines.subList(bestStart, bestEnd + 1) else emptyList()
+    }
+
+    private val ORDER_RE = Regex("(?i)(?:^|;)\\s*order\\s*:\\s*(-?\\d+)")
+
+    private fun isHiddenStyle(style: String): Boolean {
+        val st = style.lowercase().replace(" ", "")
+        return st.contains("display:none") || st.contains("visibility:hidden") ||
+            st.contains("font-size:0") || st.contains("opacity:0;") || st.endsWith("opacity:0") ||
+            st.contains("color:transparent")
+    }
+
+    private fun reorderByCssOrder(root: Element) {
+        for (parent in listOf(root) + root.select("*").toList()) {
+            val kids = parent.children().toList()
+            if (kids.size < 3) continue
+            val orders = kids.map { k -> ORDER_RE.find(k.attr("style"))?.groupValues?.get(1)?.toIntOrNull() }
+            if (orders.count { it != null } < kids.size * 0.6) continue
+            kids.zip(orders).sortedBy { it.second ?: 0 }.forEach { parent.appendChild(it.first) }
+        }
+    }
+
+    /**
+     * Web cuộn liên tục (vd tusach247) để sẵn chương sau ngay dưới chương hiện tại.
+     * Cắt bỏ từ dòng "Chương tiếp theo" / "Chương N+1" trở đi.
+     */
+    private fun cutAtNextChapter(paragraphs: List<String>, url: String, title: String): List<String> {
+        val cur = Regex("(?i)(chuong|chapter|chap)-(\\d+)").findAll(url).lastOrNull()
+            ?.groupValues?.get(2)?.toIntOrNull()
+            ?: Regex("(?i)chương\\s*(\\d+)").find(title)?.groupValues?.get(1)?.toIntOrNull()
+        val nextRe = if (cur != null) Regex("(?i)^(chương|chapter|chap)\\s*0*${cur + 1}(\\D|$)") else null
+        for (i in 1 until paragraphs.size) {
+            val p = paragraphs[i].lowercase()
+            if (p == "chương tiếp theo" || p.startsWith("chương tiếp theo") && p.length < 40 ||
+                (nextRe != null && nextRe.containsMatchIn(paragraphs[i]) && paragraphs[i].length < 120)
+            ) return paragraphs.subList(0, i)
+        }
+        return paragraphs
     }
 
     private fun isJunk(line: String): Boolean {

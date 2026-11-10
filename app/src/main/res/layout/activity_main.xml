@@ -221,6 +221,13 @@
             android:layout_height="wrap_content"
             android:text="⏹ Dừng hẳn (tắt thông báo)" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnRenderMode"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🔀 Đoạn bị lộn xộn? Đọc web này theo thứ tự hiển thị" />
+
         <!-- Cài đặt giọng -->
         <TextView
             android:layout_width="wrap_content"

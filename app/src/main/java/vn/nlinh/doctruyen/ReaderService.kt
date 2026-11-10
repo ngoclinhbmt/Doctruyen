@@ -58,6 +58,8 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         const val EXTRA_URL = "url"
         const val EXTRA_INDEX = "index"
         const val EXTRA_MINUTES = "minutes"
+        /** true = bỏ các chương đã tải sẵn trong bộ nhớ, tải lại từ web */
+        const val EXTRA_FRESH = "fresh"
 
         private const val CHANNEL_ID = "reader"
         private const val NOTIF_ID = 1
@@ -163,6 +165,10 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
                 ACTION_START -> {
                     val url = intent.getStringExtra(EXTRA_URL).orEmpty()
                     val idx = intent.getIntExtra(EXTRA_INDEX, 0)
+                    if (intent.getBooleanExtra(EXTRA_FRESH, false)) {
+                        cache.clear()
+                        prefetchJobs.clear()
+                    }
                     if (url.isNotBlank()) loadChapter(url, idx, autoplay = true)
                 }
                 ACTION_TOGGLE -> if (playing) pause() else resume()

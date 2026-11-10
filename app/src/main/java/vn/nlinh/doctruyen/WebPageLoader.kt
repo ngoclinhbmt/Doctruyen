@@ -18,7 +18,8 @@ import kotlin.coroutines.resume
  */
 class WebPageLoader(private val context: Context) {
 
-    data class Result(val html: String, val finalUrl: String)
+    /** lines = các dòng chữ theo đúng thứ tự hiện trên màn hình (bỏ chữ bị ẩn) */
+    data class Result(val html: String, val finalUrl: String, val lines: List<String> = emptyList())
 
     suspend fun load(url: String, timeoutMs: Long = 45_000): Result = withTimeout(timeoutMs) {
         suspendCancellableCoroutine { cont ->
@@ -39,7 +40,14 @@ class WebPageLoader(private val context: Context) {
 
             fun grabHtml() {
                 wv.evaluateJavascript("document.documentElement.outerHTML") { json ->
-                    finish(Result(decodeJs(json), wv.url ?: url))
+                    val html = decodeJs(json)
+                    wv.evaluateJavascript(VISUAL_LINES_JS) { linesJson ->
+                        val lines = runCatching {
+                            val arr = JSONArray(decodeJs(linesJson))
+                            (0 until arr.length()).map { arr.getString(it) }
+                        }.getOrDefault(emptyList())
+                        finish(Result(html, wv.url ?: url, lines))
+                    }
                 }
             }
 
@@ -83,6 +91,48 @@ class WebPageLoader(private val context: Context) {
                 }
             }
         }
+    }
+
+    companion object {
+        /**
+         * Lấy chữ theo thứ tự HIỂN THỊ trên màn hình (sắp theo toạ độ dọc), bỏ các đoạn bị ẩn.
+         * Chống trường hợp web xáo trộn đoạn văn trong HTML rồi dùng CSS sắp lại,
+         * hoặc chèn đoạn ẩn để chống sao chép.
+         */
+        val VISUAL_LINES_JS = """
+            (function(){
+              function hidden(el){
+                var s = getComputedStyle(el);
+                if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return true;
+                if (parseFloat(s.fontSize) < 5) return true;
+                if (s.color === 'transparent' || s.color === 'rgba(0, 0, 0, 0)') return true;
+                var r = el.getBoundingClientRect();
+                return r.width < 2 || r.height < 2;
+              }
+              var skip = 'nav,header,footer,script,style,noscript,button,select,form,aside';
+              var inlineTags = /^(B|I|EM|STRONG|SPAN|FONT|U|SMALL|SUP|SUB|MARK|Q|CITE|LABEL)${'$'}/;
+              var out = [];
+              var blocks = document.querySelectorAll('p,div,li,blockquote,h1,h2,h3,h4,h5,h6,td,article,section');
+              for (var i = 0; i < blocks.length; i++) {
+                var el = blocks[i];
+                if (el.closest(skip)) continue;
+                var parts = [], cur = '';
+                for (var k = 0; k < el.childNodes.length; k++) {
+                  var n = el.childNodes[k];
+                  if (n.nodeType === 3) cur += n.textContent;
+                  else if (n.nodeType === 1 && n.tagName === 'BR') { parts.push(cur); cur = ''; }
+                  else if (n.nodeType === 1 && inlineTags.test(n.tagName) && !hidden(n)) cur += n.innerText;
+                }
+                parts.push(cur);
+                var txt = parts.map(function(t){ return t.replace(/\s+/g,' ').trim(); }).filter(function(t){ return t.length > 0; });
+                if (!txt.length || hidden(el)) continue;
+                var r = el.getBoundingClientRect();
+                out.push({y: r.top + window.scrollY, x: r.left, t: txt.join('\n')});
+              }
+              out.sort(function(a,b){ return (a.y - b.y) || (a.x - b.x); });
+              return JSON.stringify(out.map(function(o){ return o.t; }).join('\n').split('\n'));
+            })()
+        """.trimIndent()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
