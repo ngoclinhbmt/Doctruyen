@@ -101,36 +101,52 @@ class WebPageLoader(private val context: Context) {
          */
         val VISUAL_LINES_JS = """
             (function(){
-              function hidden(el){
+              var SKIP = /^(NAV|HEADER|FOOTER|SCRIPT|STYLE|NOSCRIPT|BUTTON|SELECT|FORM|ASIDE|SVG|IFRAME|TEMPLATE)${'$'}/;
+              var INLINE = /^(B|I|EM|STRONG|SPAN|FONT|U|SMALL|SUP|SUB|MARK|Q|CITE|LABEL)${'$'}/;
+              function hiddenStyle(el){
                 var s = getComputedStyle(el);
-                if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return true;
-                if (parseFloat(s.fontSize) < 5) return true;
-                if (s.color === 'transparent' || s.color === 'rgba(0, 0, 0, 0)') return true;
-                var r = el.getBoundingClientRect();
-                return r.width < 2 || r.height < 2;
+                return s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0 ||
+                       parseFloat(s.fontSize) < 5 || s.color === 'transparent' || s.color === 'rgba(0, 0, 0, 0)';
               }
-              var skip = 'nav,header,footer,script,style,noscript,button,select,form,aside';
-              var inlineTags = /^(B|I|EM|STRONG|SPAN|FONT|U|SMALL|SUP|SUB|MARK|Q|CITE|LABEL)${'$'}/;
-              var out = [];
-              var blocks = document.querySelectorAll('p,div,li,blockquote,h1,h2,h3,h4,h5,h6,td,article,section');
-              for (var i = 0; i < blocks.length; i++) {
-                var el = blocks[i];
-                if (el.closest(skip)) continue;
+              function ownText(el){
                 var parts = [], cur = '';
                 for (var k = 0; k < el.childNodes.length; k++) {
                   var n = el.childNodes[k];
                   if (n.nodeType === 3) cur += n.textContent;
                   else if (n.nodeType === 1 && n.tagName === 'BR') { parts.push(cur); cur = ''; }
-                  else if (n.nodeType === 1 && inlineTags.test(n.tagName) && !hidden(n)) cur += n.innerText;
+                  else if (n.nodeType === 1 && INLINE.test(n.tagName) && !n.querySelector('p,div,li') && !hiddenStyle(n)) cur += (n.innerText || n.textContent);
                 }
                 parts.push(cur);
-                var txt = parts.map(function(t){ return t.replace(/\s+/g,' ').trim(); }).filter(function(t){ return t.length > 0; });
-                if (!txt.length || hidden(el)) continue;
-                var r = el.getBoundingClientRect();
-                out.push({y: r.top + window.scrollY, x: r.left, t: txt.join('\n')});
+                return parts.map(function(t){ return t.replace(/\s+/g,' ').trim(); })
+                            .filter(function(t){ return t.length > 0; });
               }
-              out.sort(function(a,b){ return (a.y - b.y) || (a.x - b.x); });
-              return JSON.stringify(out.map(function(o){ return o.t; }).join('\n').split('\n'));
+              var items = [], seq = 0, withRect = 0;
+              function walk(el){
+                if (SKIP.test(el.tagName) || hiddenStyle(el)) return;
+                var t = ownText(el);
+                if (t.length) {
+                  var r = el.getBoundingClientRect();
+                  if (r.height >= 2 && r.width >= 2) withRect++;
+                  items.push({y: r.top + window.scrollY, x: r.left, o: seq++, t: t.join('\n')});
+                }
+                var kids = Array.prototype.slice.call(el.children).filter(function(c){
+                  return c.tagName !== 'BR' && !(INLINE.test(c.tagName) && !c.querySelector('p,div,li'));
+                });
+                // Khối flex/grid: sắp con theo CSS "order" (không cần tính vị trí trên màn hình)
+                var d = getComputedStyle(el).display;
+                if (d.indexOf('flex') >= 0 || d.indexOf('grid') >= 0) {
+                  kids = kids.map(function(c, i){ return {c: c, i: i, o: parseInt(getComputedStyle(c).order, 10) || 0}; })
+                             .sort(function(a, b){ return (a.o - b.o) || (a.i - b.i); })
+                             .map(function(x){ return x.c; });
+                }
+                for (var i = 0; i < kids.length; i++) walk(kids[i]);
+              }
+              if (document.body) walk(document.body);
+              // Có toạ độ thật (trang đã dàn trang) → sắp theo vị trí trên màn hình
+              if (items.length && withRect >= items.length * 0.8) {
+                items.sort(function(a, b){ return (a.y - b.y) || (a.x - b.x) || (a.o - b.o); });
+              }
+              return JSON.stringify(items.map(function(o){ return o.t; }).join('\n').split('\n'));
             })()
         """.trimIndent()
     }

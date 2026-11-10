@@ -16,6 +16,9 @@ import kotlinx.coroutines.withContext
  */
 class ChapterLoader(private val context: Context, private val webLoader: WebPageLoader) {
 
+    /** Web này đã bật "đọc theo thứ tự hiển thị" chưa */
+    fun requiresVisual(url: String): Boolean = Library.hostOf(url) in Prefs(context).renderHosts
+
     suspend fun fetch(url: String, onWebView: (() -> Unit)? = null): Chapter {
         var directError: Exception? = null
         val host = runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
@@ -43,7 +46,9 @@ class ChapterLoader(private val context: Context, private val webLoader: WebPage
             try {
                 val page = webLoader.load(url)
                 return withContext(Dispatchers.Default) {
-                    ChapterFetcher.fromHtml(page.html, page.finalUrl, "trình duyệt ẩn", page.lines)
+                    ChapterFetcher.fromHtml(
+                        page.html, page.finalUrl, "trình duyệt ẩn", page.lines, requireVisual = forceRender,
+                    )
                 }
             } catch (e: TimeoutCancellationException) {
                 webError = ChapterFetcher.NoContentException("trang tải quá lâu")

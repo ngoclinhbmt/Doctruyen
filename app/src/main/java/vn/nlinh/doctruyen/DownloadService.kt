@@ -142,7 +142,7 @@ class DownloadService : Service() {
 
         while (url != null) {
             if (!seen.add(url.trimEnd('/'))) break // tránh vòng lặp link
-            val existing = Library.loadOffline(url)
+            val existing = Library.loadOffline(url, requireVisual = loader.requiresVisual(url))
             if (existing != null) {
                 lastTitle = existing.title
                 url = existing.nextUrl

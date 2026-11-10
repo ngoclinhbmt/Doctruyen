@@ -284,6 +284,10 @@ class MainActivity : AppCompatActivity() {
         box.addView(TextView(this).apply {
             text = buildString {
                 append("💾 $offline chương offline")
+                if (Library.hostOf(book.storyUrl) in prefs.renderHosts) {
+                    val legacy = Library.legacyOfflineCount(book.id)
+                    if (legacy > 0) append("\n⚠ $legacy chương lưu theo thứ tự cũ (có thể lộn xộn) – bấm ⬇ Tải offline để tải lại đúng thứ tự")
+                }
                 if (dlText.isNotBlank()) append("\n").append(dlText)
             }
             textSize = 13f

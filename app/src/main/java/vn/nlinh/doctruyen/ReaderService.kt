@@ -319,7 +319,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
      */
     private suspend fun fetchWithRetry(url: String, showStatus: Boolean = true): Chapter {
         // Có bản offline thì đọc luôn, không cần mạng
-        Library.loadOffline(url)?.let { return it }
+        Library.loadOffline(url, requireVisual = loader.requiresVisual(url))?.let { return it }
         val ch = loader.fetch(url) {
             if (showStatus) setState { copy(status = "Đang mở trang bằng trình duyệt ẩn…") }
         }

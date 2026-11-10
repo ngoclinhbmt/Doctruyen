@@ -14,6 +14,8 @@ data class Chapter(
     val prevUrl: String?,
     /** Tên truyện (để hiện trong Ngăn tủ) */
     val storyTitle: String = "",
+    /** true = các đoạn lấy theo thứ tự HIỂN THỊ trên màn hình (chắc chắn đúng thứ tự) */
+    val visualOrder: Boolean = false,
 )
 
 /** Tải một trang chương truyện và tách: tiêu đề, nội dung, link chương sau/trước. */
@@ -77,7 +79,11 @@ object ChapterFetcher {
     }
 
     /** Phân tích HTML (từ tải trực tiếp hoặc từ trình duyệt ẩn). */
-    fun fromHtml(html: String, url: String, source: String, renderedLines: List<String> = emptyList()): Chapter {
+    fun fromHtml(
+        html: String, url: String, source: String,
+        renderedLines: List<String> = emptyList(),
+        requireVisual: Boolean = false,
+    ): Chapter {
         saveDebug(html, url, source)
         var chapter = parse(Jsoup.parse(html, url), url)
         // Có chữ theo thứ tự hiển thị (từ trình duyệt ẩn) → ưu tiên dùng, vì đúng thứ tự
@@ -88,7 +94,13 @@ object ChapterFetcher {
                 url, chapter.title,
             )
             val domLen = chapter.paragraphs.sumOf { it.length }
-            if (rendered.sumOf { it.length } >= domLen * 0.5) chapter = chapter.copy(paragraphs = rendered)
+            if (rendered.sumOf { it.length } >= domLen * 0.5 && rendered.sumOf { it.length } >= 150) {
+                chapter = chapter.copy(paragraphs = rendered, visualOrder = true)
+            }
+        }
+        // Web đã bật "đọc theo thứ tự hiển thị": không chấp nhận thứ tự HTML (có thể lộn xộn)
+        if (requireVisual && !chapter.visualOrder) {
+            throw NoContentException("chưa lấy được thứ tự hiển thị của trang")
         }
         if (chapter.paragraphs.sumOf { it.length } < 150) {
             val text = Jsoup.parse(html).text().lowercase()

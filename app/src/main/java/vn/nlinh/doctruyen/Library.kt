@@ -165,10 +165,10 @@ object Library {
 
     private fun bookDir(bookId: String): File? = offlineRoot?.let { File(it, sha1(bookId)) }
 
-    private fun chapterFile(url: String): File? {
+    private fun chapterFile(url: String, visual: Boolean): File? {
         val story = storyUrlOf(url) ?: return null
         val dir = bookDir(bookId(story)) ?: return null
-        return File(dir, sha1(url.trimEnd('/')) + ".json")
+        return File(dir, sha1(url.trimEnd('/')) + if (visual) ".v.json" else ".json")
     }
 
     /** Xoá các chương đã lưu của một truyện (vd khi đổi cách đọc web) */
@@ -176,38 +176,55 @@ object Library {
         bookDir(bookId)?.deleteRecursively()
     }
 
-    fun isOffline(url: String): Boolean = chapterFile(url)?.exists() == true
+    fun hostOf(url: String): String =
+        runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
 
+    /** Số chương đã lưu (mọi kiểu) */
     fun offlineCount(bookId: String): Int =
         bookDir(bookId)?.listFiles { f -> f.name.endsWith(".json") }?.size ?: 0
 
+    /** Số chương lưu theo thứ tự HTML cũ (có thể lộn xộn) */
+    fun legacyOfflineCount(bookId: String): Int =
+        bookDir(bookId)?.listFiles { f -> f.name.endsWith(".json") && !f.name.endsWith(".v.json") }?.size ?: 0
+
     fun saveOffline(ch: Chapter) {
-        val f = chapterFile(ch.url) ?: return
+        val f = chapterFile(ch.url, ch.visualOrder) ?: return
         f.parentFile?.mkdirs()
         val o = JSONObject().apply {
             put("url", ch.url); put("title", ch.title); put("storyTitle", ch.storyTitle)
             put("next", ch.nextUrl ?: ""); put("prev", ch.prevUrl ?: "")
             put("paragraphs", JSONArray(ch.paragraphs))
         }
-        runCatching { f.writeText(o.toString()) }
+        runCatching {
+            f.writeText(o.toString())
+            // Đã có bản đúng thứ tự → xoá bản cũ
+            if (ch.visualOrder) chapterFile(ch.url, false)?.delete()
+        }
     }
 
-    fun loadOffline(url: String): Chapter? {
-        val f = chapterFile(url) ?: return null
-        if (!f.exists()) return null
-        return runCatching {
-            val o = JSONObject(f.readText())
-            val arr = o.getJSONArray("paragraphs")
-            Chapter(
-                url = o.getString("url"),
-                title = o.optString("title"),
-                paragraphs = (0 until arr.length()).map { arr.getString(it) },
-                nextUrl = o.optString("next").ifBlank { null },
-                prevUrl = o.optString("prev").ifBlank { null },
-                storyTitle = o.optString("storyTitle"),
-            )
-        }.getOrNull()
+    /**
+     * Đọc chương đã lưu. requireVisual = true (web đã bật đọc theo thứ tự hiển thị):
+     * chỉ nhận bản đúng thứ tự; bản cũ coi như chưa có để tải lại.
+     */
+    fun loadOffline(url: String, requireVisual: Boolean = false): Chapter? {
+        chapterFile(url, true)?.takeIf { it.exists() }?.let { f -> readChapter(f, true)?.let { return it } }
+        if (requireVisual) return null
+        return chapterFile(url, false)?.takeIf { it.exists() }?.let { readChapter(it, false) }
     }
+
+    private fun readChapter(f: File, visual: Boolean): Chapter? = runCatching {
+        val o = JSONObject(f.readText())
+        val arr = o.getJSONArray("paragraphs")
+        Chapter(
+            url = o.getString("url"),
+            title = o.optString("title"),
+            paragraphs = (0 until arr.length()).map { arr.getString(it) },
+            nextUrl = o.optString("next").ifBlank { null },
+            prevUrl = o.optString("prev").ifBlank { null },
+            storyTitle = o.optString("storyTitle"),
+            visualOrder = visual,
+        )
+    }.getOrNull()
 
     fun setDownload(bookId: String, info: DownloadInfo?) {
         downloads.update { m -> if (info == null) m - bookId else m + (bookId to info) }
