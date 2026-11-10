@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -30,7 +33,19 @@ jobs:
           cp app/build/outputs/apk/debug/*.apk "out/${NAME}.apk"
           echo "APK_NAME=${NAME}" >> "$GITHUB_ENV"
 
+      # Artifact chỉ để thử nhanh, tự xoá sau 7 ngày; hết dung lượng thì không làm hỏng build
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: ${{ env.APK_NAME }}
           path: out/*.apk
+          retention-days: 7
+
+      # Lưu lâu dài ở Releases: không tính vào dung lượng Actions (0,5 GB)
+      - name: Publish APK to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$APK_NAME" out/*.apk \
+            --title "$APK_NAME" --target "$GITHUB_SHA" --prerelease \
+            --notes "Build tự động #${GITHUB_RUN_NUMBER} từ commit $GITHUB_SHA (nhánh ${GITHUB_REF_NAME})"
