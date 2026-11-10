@@ -11,8 +11,8 @@ android {
         applicationId = "vn.nlinh.doctruyen"
         minSdk = 24
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.7"
+        versionCode = 9
+        versionName = "1.8"
     }
 
     // Khoá ký cố định: mọi bản build (kể cả trên GitHub) có cùng chữ ký,

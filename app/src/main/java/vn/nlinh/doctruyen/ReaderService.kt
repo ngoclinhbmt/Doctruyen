@@ -53,6 +53,9 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_NEXT = "next"
         const val ACTION_PREV = "prev"
         const val ACTION_STOP = "stop"
+        const val ACTION_PARA_NEXT = "para_next"
+        const val ACTION_PARA_PREV = "para_prev"
+        const val ACTION_SEEK = "seek"       // EXTRA_INDEX: đoạn muốn nhảy tới (0 = đầu chương)
         const val ACTION_SLEEP = "sleep"     // EXTRA_MINUTES: 0 = tắt, -1 = hết chương này
 
         const val EXTRA_URL = "url"
@@ -178,6 +181,9 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
                 ACTION_PREV -> chapter?.let { goToChapter(it.prevUrl, "Đã là chương đầu") }
                 ACTION_STOP -> stopAll()
                 ACTION_SLEEP -> setSleep(intent.getIntExtra(EXTRA_MINUTES, 0))
+                ACTION_PARA_NEXT -> seekTo(index + 1)
+                ACTION_PARA_PREV -> seekTo(index - 1)
+                ACTION_SEEK -> seekTo(intent.getIntExtra(EXTRA_INDEX, index))
                 else -> {}
             }
         }
@@ -495,6 +501,35 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         updateNotification()
     }
 
+    /**
+     * Nhảy tới một đoạn trong chương. Quá cuối chương → sang chương sau;
+     * lùi quá đầu chương → về đoạn cuối của chương trước.
+     */
+    private fun seekTo(target: Int) {
+        val ch = chapter ?: return
+        if (chunks.isEmpty()) return
+        if (target >= chunks.size) {
+            ch.nextUrl?.let { loadChapter(it, 0, autoplay = playing) }
+                ?: setState { copy(status = "Đã là đoạn cuối của truyện") }
+            return
+        }
+        if (target < 0) {
+            ch.prevUrl?.let { loadChapter(it, Int.MAX_VALUE, autoplay = playing) }
+                ?: setState { copy(status = "Đã là đoạn đầu") }
+            return
+        }
+        index = target
+        errorCount = 0
+        if (playing) {
+            speakCurrent()
+        } else {
+            prefs.saveProgress(ch.url, index, ch.title)
+            Library.updateProgress(ch, index)
+            setState { copy(index = index, total = chunks.size, current = chunks[index], status = "Tạm dừng") }
+            updateNotification()
+        }
+    }
+
     private fun resume() {
         if (chunks.isEmpty()) {
             val url = prefs.savedUrl
@@ -657,9 +692,11 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .addAction(0, "⏮ Trước", actionIntent(ACTION_PREV, 1))
-            .addAction(0, if (playing) "⏸ Dừng" else "▶ Đọc", actionIntent(ACTION_TOGGLE, 2))
-            .addAction(0, "Sau ⏭", actionIntent(ACTION_NEXT, 3))
+            .addAction(0, "⏮ Chương", actionIntent(ACTION_PREV, 1))
+            .addAction(0, "⏪ Đoạn", actionIntent(ACTION_PARA_PREV, 5))
+            .addAction(0, if (playing) "⏸" else "▶", actionIntent(ACTION_TOGGLE, 2))
+            .addAction(0, "Đoạn ⏩", actionIntent(ACTION_PARA_NEXT, 6))
+            .addAction(0, "Chương ⏭", actionIntent(ACTION_NEXT, 3))
             .setDeleteIntent(actionIntent(ACTION_STOP, 4))
             .build()
     }

@@ -169,6 +169,16 @@
                     android:layout_marginTop="6dp"
                     android:max="100" />
 
+                <!-- Kéo để nhảy tới đoạn bất kỳ trong chương -->
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/sliderPara"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:stepSize="1"
+                    android:valueFrom="1"
+                    android:valueTo="2"
+                    android:visibility="gone" />
+
                 <TextView
                     android:id="@+id/tvCurrent"
                     android:layout_width="match_parent"
@@ -212,6 +222,31 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Sau ⏭" />
+        </LinearLayout>
+
+        <!-- Chuyển đoạn -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="6dp">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnParaPrev"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="6dp"
+                android:text="⏪ Đoạn trước" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnParaNext"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Đoạn sau ⏩" />
         </LinearLayout>
 
         <com.google.android.material.button.MaterialButton

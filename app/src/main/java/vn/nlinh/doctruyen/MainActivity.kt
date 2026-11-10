@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: Prefs
     private var previewTts: TextToSpeech? = null
     private var voices: List<Voice> = emptyList()
+    private var draggingSlider = false
 
     private val sleepOptions = listOf(
         "Không hẹn giờ" to 0,
@@ -154,6 +155,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
         b.btnNext.setOnClickListener { sendIfActive(ReaderService.ACTION_NEXT) }
+        b.btnParaNext.setOnClickListener { sendIfActive(ReaderService.ACTION_PARA_NEXT) }
+        b.btnParaPrev.setOnClickListener { sendIfActive(ReaderService.ACTION_PARA_PREV) }
+        b.sliderPara.setLabelFormatter { v -> "Đoạn ${v.toInt()}" }
+        b.sliderPara.addOnSliderTouchListener(object : com.google.android.material.slider.Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: com.google.android.material.slider.Slider) {
+                draggingSlider = true
+            }
+            override fun onStopTrackingTouch(slider: com.google.android.material.slider.Slider) {
+                draggingSlider = false
+                if (ReaderState.state.value.active) {
+                    ReaderService.send(this@MainActivity, ReaderService.ACTION_SEEK,
+                        bundleOf(ReaderService.EXTRA_INDEX to slider.value.toInt() - 1))
+                }
+            }
+        })
         b.btnPrev.setOnClickListener { sendIfActive(ReaderService.ACTION_PREV) }
         b.btnStop.setOnClickListener { sendIfActive(ReaderService.ACTION_STOP) }
         b.btnBattery.setOnClickListener { askIgnoreBattery() }
@@ -346,6 +362,18 @@ class MainActivity : AppCompatActivity() {
                     b.tvTitle.text = s.title
                     b.tvTitle.visibility = if (s.title.isBlank()) View.GONE else View.VISIBLE
                     b.tvProgress.text = if (s.total > 0) "Đoạn ${s.index + 1}/${s.total}" else ""
+                    if (s.total > 1 && !s.loading) {
+                        b.sliderPara.visibility = View.VISIBLE
+                        if (!draggingSlider) {
+                            b.sliderPara.valueFrom = 1f
+                            b.sliderPara.valueTo = s.total.toFloat()
+                            b.sliderPara.value = (s.index + 1).coerceIn(1, s.total).toFloat()
+                        }
+                    } else {
+                        b.sliderPara.visibility = View.GONE
+                    }
+                    b.progress.visibility =
+                        if (s.loading || b.sliderPara.visibility != View.VISIBLE) View.VISIBLE else View.GONE
                     b.progress.isIndeterminate = s.loading
                     if (!s.loading) {
                         b.progress.setProgressCompat(
