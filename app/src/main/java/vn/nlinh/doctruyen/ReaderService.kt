@@ -22,6 +22,9 @@ import android.os.PowerManager
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.app.NotificationCompat
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
@@ -122,6 +125,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         ChapterFetcher.debugDir = cacheDir
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         createChannel()
+        setupMediaSession()
         tts = TextToSpeech(this, this)
     }
 
@@ -200,6 +204,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         scope.cancel()
+        runCatching { mediaSession.isActive = false; mediaSession.release() }
         runCatching { tts.stop(); tts.shutdown() }
         releaseWakeLock()
         abandonFocus()
@@ -530,6 +535,75 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
+    // ---------------- Nút tai nghe Bluetooth / màn hình khoá ----------------
+
+    private lateinit var mediaSession: MediaSessionCompat
+
+    /**
+     * Phiên phát media: nhận nút trên tai nghe Bluetooth, tai nghe dây, đồng hồ, xe hơi
+     * và điều khiển trên màn hình khoá.
+     *  - Bấm 1 lần: Dừng / Đọc tiếp
+     *  - Bấm 2 lần (hoặc nút Next): đoạn sau
+     *  - Bấm 3 lần (hoặc nút Previous): đoạn trước
+     */
+    private fun setupMediaSession() {
+        mediaSession = MediaSessionCompat(this, "DocTruyen").apply {
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() = runWhenReady { resume() }
+                override fun onPause() = runWhenReady { pause() }
+                override fun onStop() = runWhenReady { pause() }
+                override fun onSkipToNext() = runWhenReady { seekTo(index + 1) }
+                override fun onSkipToPrevious() = runWhenReady { seekTo(index - 1) }
+                override fun onFastForward() = runWhenReady {
+                    chapter?.let { goToChapter(it.nextUrl, "Đã là chương cuối") }
+                }
+                override fun onRewind() = runWhenReady {
+                    chapter?.let { goToChapter(it.prevUrl, "Đã là chương đầu") }
+                }
+                override fun onCustomAction(action: String?, extras: Bundle?) = runWhenReady {
+                    when (action) {
+                        "chapter_next" -> chapter?.let { goToChapter(it.nextUrl, "Đã là chương cuối") }
+                        "chapter_prev" -> chapter?.let { goToChapter(it.prevUrl, "Đã là chương đầu") }
+                    }
+                }
+            })
+            isActive = true
+        }
+        updateSession()
+    }
+
+    private fun runWhenReady(action: () -> Unit) {
+        if (ttsReady) action() else pendingAction = action
+    }
+
+    private fun updateSession() {
+        if (!::mediaSession.isInitialized) return
+        val s = ReaderState.state.value
+        val actions = PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
+            PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP or
+            PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+            PlaybackStateCompat.ACTION_FAST_FORWARD or PlaybackStateCompat.ACTION_REWIND
+        mediaSession.setPlaybackState(
+            PlaybackStateCompat.Builder()
+                .setActions(actions)
+                .setState(
+                    if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+                    index.toLong(), 1f,
+                )
+                .addCustomAction("chapter_prev", "Chương trước", R.drawable.ic_skip_prev)
+                .addCustomAction("chapter_next", "Chương sau", R.drawable.ic_skip_next)
+                .build()
+        )
+        mediaSession.setMetadata(
+            MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, s.title.ifBlank { "Đọc Truyện" })
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, chapter?.storyTitle.orEmpty())
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM,
+                    if (s.total > 0) "Đoạn ${s.index + 1}/${s.total}" else "")
+                .build()
+        )
+    }
+
     private fun resume() {
         if (chunks.isEmpty()) {
             val url = prefs.savedUrl
@@ -692,11 +766,17 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .addAction(0, "⏮ Chương", actionIntent(ACTION_PREV, 1))
-            .addAction(0, "⏪ Đoạn", actionIntent(ACTION_PARA_PREV, 5))
-            .addAction(0, if (playing) "⏸" else "▶", actionIntent(ACTION_TOGGLE, 2))
-            .addAction(0, "Đoạn ⏩", actionIntent(ACTION_PARA_NEXT, 6))
-            .addAction(0, "Chương ⏭", actionIntent(ACTION_NEXT, 3))
+            .addAction(R.drawable.ic_skip_prev, "Chương trước", actionIntent(ACTION_PREV, 1))
+            .addAction(R.drawable.ic_para_prev, "Đoạn trước", actionIntent(ACTION_PARA_PREV, 5))
+            .addAction(if (playing) R.drawable.ic_pause else R.drawable.ic_play,
+                if (playing) "Dừng" else "Đọc", actionIntent(ACTION_TOGGLE, 2))
+            .addAction(R.drawable.ic_para_next, "Đoạn sau", actionIntent(ACTION_PARA_NEXT, 6))
+            .addAction(R.drawable.ic_skip_next, "Chương sau", actionIntent(ACTION_NEXT, 3))
+            .setStyle(
+                androidx.media.app.NotificationCompat.MediaStyle()
+                    .setMediaSession(mediaSession.sessionToken)
+                    .setShowActionsInCompactView(1, 2, 3)
+            )
             .setDeleteIntent(actionIntent(ACTION_STOP, 4))
             .build()
     }
@@ -708,6 +788,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun updateNotification() {
+        updateSession()
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         runCatching { nm.notify(NOTIF_ID, buildNotification()) }
     }
