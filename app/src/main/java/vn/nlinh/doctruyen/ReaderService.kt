@@ -13,6 +13,8 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -204,6 +206,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         scope.cancel()
+        stopSilence()
         runCatching { mediaSession.isActive = false; mediaSession.release() }
         runCatching { tts.stop(); tts.shutdown() }
         releaseWakeLock()
@@ -411,6 +414,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
         playing = true
         acquireWakeLock()
         registerNoisy()
+        startSilence()
         speakCurrent()
     }
 
@@ -470,6 +474,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
 
     private fun finishStory(msg: String) {
         playing = false
+        stopSilence()
         setState { copy(loading = false, playing = false, status = msg) }
         tts.speak(msg, TextToSpeech.QUEUE_FLUSH, null, "end")
         releaseWakeLock()
@@ -498,6 +503,7 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
 
     private fun pause() {
         playing = false
+        stopSilence()
         stopSpeaking()
         releaseWakeLock()
         unregisterNoisy()
@@ -570,6 +576,58 @@ class ReaderService : Service(), TextToSpeech.OnInitListener {
             isActive = true
         }
         updateSession()
+    }
+
+    // Giọng đọc do app TTS (Google/Samsung) phát, nên Android tưởng app TTS mới là
+    // "app đang phát nhạc" và gửi nút tai nghe cho nó. Phát kèm một luồng âm thanh im lặng
+    // trong chính app này để Android chuyển nút tai nghe về đây.
+    @Volatile private var silenceOn = false
+
+    private fun startSilence() {
+        if (silenceOn) return
+        silenceOn = true
+        Thread({
+            val rate = 16000
+            val size = AudioTrack.getMinBufferSize(
+                rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
+            ).coerceAtLeast(4096)
+            val track = runCatching {
+                AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setSampleRate(rate)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(size)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            }.getOrNull()
+            if (track == null) {
+                silenceOn = false
+                return@Thread
+            }
+            val zeros = ByteArray(size)
+            runCatching {
+                track.play()
+                while (silenceOn) {
+                    if (track.write(zeros, 0, zeros.size) < 0) break
+                }
+            }
+            runCatching { track.stop() }
+            runCatching { track.release() }
+        }, "DocTruyen-silence").start()
+    }
+
+    private fun stopSilence() {
+        silenceOn = false
     }
 
     private fun runWhenReady(action: () -> Unit) {
